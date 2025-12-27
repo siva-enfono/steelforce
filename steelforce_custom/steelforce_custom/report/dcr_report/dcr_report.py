@@ -6,10 +6,12 @@ import frappe
 
 def color_parent_name(name):
     """Apply color based on sales type"""
-    if name.startswith("Counter Sales"):
-        return f"<span style='color:#1f77b4; font-weight:600'>{name}</span>"  # Blue
     if name.startswith("Online Sales"):
         return f"<span style='color:#2ca02c; font-weight:600'>{name}</span>"  # Green
+    if name.startswith("Home Sales"):
+        return f"<span style='color:#ff7f0e; font-weight:600'>{name}</span>"  # Orange
+    if name.startswith("Counter Sales"):
+        return f"<span style='color:#1f77b4; font-weight:600'>{name}</span>"  # Blue
     return name
 
 
@@ -60,6 +62,10 @@ def execute(filters=None):
                         CASE
                             WHEN si.customer IN ('HUNGER STATION', 'KETA', 'JAHEZ', 'TO YOU')
                                 THEN 'Online Sales'
+                            WHEN si.customer = 'Home Customer'
+                                THEN 'Home Sales'
+                            WHEN si.customer = 'Walk-in Customer'
+                                THEN 'Counter Sales'
                             ELSE
                                 'Counter Sales'
                         END,
@@ -72,6 +78,10 @@ def execute(filters=None):
                         CASE
                             WHEN si.customer IN ('HUNGER STATION', 'KETA', 'JAHEZ', 'TO YOU')
                                 THEN 'Online Sales'
+                            WHEN si.customer = 'Home Customer'
+                                THEN 'Home Sales'
+                            WHEN si.customer = 'Walk-in Customer'
+                                THEN 'Counter Sales'
                             ELSE
                                 'Counter Sales'
                         END,
@@ -103,7 +113,7 @@ def execute(filters=None):
             AND si.posting_date BETWEEN %(from_date)s AND %(to_date)s
 
         GROUP BY parent_name, si.is_return
-        ORDER BY si.is_return ASC
+        ORDER BY parent_name, si.is_return
     """, {
         "from_date": from_date,
         "to_date": to_date,
@@ -147,13 +157,11 @@ def execute(filters=None):
                 AND si.posting_date BETWEEN %(from_date)s AND %(to_date)s
                 AND si.is_return = %(is_return)s
 
-                -- Payment mode match
                 AND (
                     (%(mode)s LIKE '%%Credit Sale%%' AND sip.name IS NULL)
                     OR IFNULL(sip.mode_of_payment, 'Credit Sale') = %(mode_only)s
                 )
 
-                -- Sales type match (FINAL RULE)
                 AND (
                     (
                         %(sales_type)s = 'Online Sales'
@@ -161,8 +169,15 @@ def execute(filters=None):
                     )
                     OR
                     (
+                        %(sales_type)s = 'Home Sales'
+                        AND si.customer = 'Home Customer'
+                    )
+                    OR
+                    (
                         %(sales_type)s = 'Counter Sales'
-                        AND si.customer NOT IN ('HUNGER STATION', 'KETA', 'JAHEZ', 'TO YOU')
+                        AND si.customer NOT IN (
+                            'HUNGER STATION', 'KETA', 'JAHEZ', 'TO YOU', 'Home Customer'
+                        )
                     )
                 )
 
