@@ -33,7 +33,8 @@ def execute(filters=None):
             "label": "Invoice",
             "fieldtype": "Link",
             "options": "Sales Invoice",
-            "hidden": 1
+            "width": 180
+
         }
     ]
 
