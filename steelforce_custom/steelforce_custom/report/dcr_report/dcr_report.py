@@ -3,6 +3,7 @@
 
 import frappe
 
+
 def execute(filters=None):
     if not filters:
         filters = {}
@@ -28,13 +29,11 @@ def execute(filters=None):
             "width": 180
         },
         {
-            # hidden link field – ONLY used for invoices
             "fieldname": "invoice",
             "label": "Invoice",
             "fieldtype": "Link",
             "options": "Sales Invoice",
-            "width": 180
-
+            "width": 260
         }
     ]
 
@@ -49,9 +48,7 @@ def execute(filters=None):
                 WHEN si.is_return = 1 THEN
                     CONCAT(
                         CASE
-                            WHEN si.customer = 'Home Sales Customer'
-                                THEN 'Home Sales'
-                            WHEN si.customer = 'Walk-in Customer'
+                            WHEN si.customer IN ('Walk-in Customer', 'Home Sales Customer')
                                 THEN 'Counter Sales'
                             ELSE
                                 'Online Sales'
@@ -63,9 +60,7 @@ def execute(filters=None):
                 ELSE
                     CONCAT(
                         CASE
-                            WHEN si.customer = 'Home Sales Customer'
-                                THEN 'Home Sales'
-                            WHEN si.customer = 'Walk-in Customer'
+                            WHEN si.customer IN ('Walk-in Customer', 'Home Sales Customer')
                                 THEN 'Counter Sales'
                             ELSE
                                 'Online Sales'
@@ -106,10 +101,10 @@ def execute(filters=None):
     }, as_dict=True)
 
     # -------------------------------------------------
-    # BUILD TREE
+    # 🔹 BUILD TREE
     # -------------------------------------------------
     for p in parents:
-        # 🔹 Parent row (plain text, NOT a link)
+        # Parent row
         data.append({
             "name": p.parent_name,
             "parent": None,
@@ -117,8 +112,11 @@ def execute(filters=None):
             "indent": 0
         })
 
+        sales_type = p.parent_name.split(" - ")[0]
+        mode_only = p.parent_name.split(" - ")[-1].replace(" (Return)", "")
+
         # -------------------------------------------------
-        # 🔹 CHILDREN → SALES INVOICES (CLICKABLE)
+        # 🔹 CHILDREN → SALES INVOICES
         # -------------------------------------------------
         invoices = frappe.db.sql("""
             SELECT
@@ -129,16 +127,33 @@ def execute(filters=None):
                 ON sip.parent = si.name
                 AND sip.parenttype = 'Sales Invoice'
                 AND sip.parentfield = 'payments'
+
             WHERE
                 si.docstatus = 1
                 AND si.is_pos = 1
                 AND si.pos_profile = %(pos_profile)s
                 AND si.posting_date BETWEEN %(from_date)s AND %(to_date)s
                 AND si.is_return = %(is_return)s
+
+                -- 🔹 Payment mode match
                 AND (
                     (%(mode)s LIKE '%%Credit Sale%%' AND sip.name IS NULL)
                     OR IFNULL(sip.mode_of_payment, 'Credit Sale') = %(mode_only)s
                 )
+
+                -- 🔹 Sales type match
+                AND (
+                    (
+                        %(sales_type)s = 'Counter Sales'
+                        AND si.customer IN ('Walk-in Customer', 'Home Sales Customer')
+                    )
+                    OR
+                    (
+                        %(sales_type)s = 'Online Sales'
+                        AND si.customer NOT IN ('Walk-in Customer', 'Home Sales Customer')
+                    )
+                )
+
             ORDER BY si.name
         """, {
             "from_date": from_date,
@@ -146,13 +161,14 @@ def execute(filters=None):
             "pos_profile": pos_profile,
             "is_return": p.is_return,
             "mode": p.parent_name,
-            "mode_only": p.parent_name.split(' - ')[-1].replace(' (Return)', '')
+            "mode_only": mode_only,
+            "sales_type": sales_type
         }, as_dict=True)
 
         for inv in invoices:
             data.append({
-                "name": inv.name,          # shown text
-                "invoice": inv.name,       # actual clickable link
+                "name": inv.name,        # display text
+                "invoice": inv.name,     # clickable link
                 "parent": p.parent_name,
                 "amount": inv.grand_total,
                 "indent": 1
