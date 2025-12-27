@@ -4,6 +4,15 @@
 import frappe
 
 
+def color_parent_name(name):
+    """Apply color based on sales type"""
+    if name.startswith("Counter Sales"):
+        return f"<span style='color:#1f77b4; font-weight:600'>{name}</span>"  # Blue
+    if name.startswith("Online Sales"):
+        return f"<span style='color:#2ca02c; font-weight:600'>{name}</span>"  # Green
+    return name
+
+
 def execute(filters=None):
     if not filters:
         filters = {}
@@ -38,6 +47,7 @@ def execute(filters=None):
     ]
 
     data = []
+    grand_total = 0
 
     # -------------------------------------------------
     # 🔹 PARENTS → SALES TYPE + MODE OF PAYMENT
@@ -48,10 +58,10 @@ def execute(filters=None):
                 WHEN si.is_return = 1 THEN
                     CONCAT(
                         CASE
-                            WHEN si.customer IN ('Walk-in Customer', 'Home Sales Customer')
-                                THEN 'Counter Sales'
+                            WHEN si.customer IN ('HUNGER STATION', 'KETA', 'JAHEZ', 'TO YOU')
+                                THEN 'Online Sales'
                             ELSE
-                                'Online Sales'
+                                'Counter Sales'
                         END,
                         ' - ',
                         IFNULL(sip.mode_of_payment, 'Credit Sale'),
@@ -60,10 +70,10 @@ def execute(filters=None):
                 ELSE
                     CONCAT(
                         CASE
-                            WHEN si.customer IN ('Walk-in Customer', 'Home Sales Customer')
-                                THEN 'Counter Sales'
+                            WHEN si.customer IN ('HUNGER STATION', 'KETA', 'JAHEZ', 'TO YOU')
+                                THEN 'Online Sales'
                             ELSE
-                                'Online Sales'
+                                'Counter Sales'
                         END,
                         ' - ',
                         IFNULL(sip.mode_of_payment, 'Credit Sale')
@@ -104,13 +114,15 @@ def execute(filters=None):
     # 🔹 BUILD TREE
     # -------------------------------------------------
     for p in parents:
-        # Parent row
+        # Parent row (colored)
         data.append({
-            "name": p.parent_name,
+            "name": color_parent_name(p.parent_name),
             "parent": None,
             "amount": p.amount,
             "indent": 0
         })
+
+        grand_total += p.amount or 0
 
         sales_type = p.parent_name.split(" - ")[0]
         mode_only = p.parent_name.split(" - ")[-1].replace(" (Return)", "")
@@ -135,22 +147,22 @@ def execute(filters=None):
                 AND si.posting_date BETWEEN %(from_date)s AND %(to_date)s
                 AND si.is_return = %(is_return)s
 
-                -- 🔹 Payment mode match
+                -- Payment mode match
                 AND (
                     (%(mode)s LIKE '%%Credit Sale%%' AND sip.name IS NULL)
                     OR IFNULL(sip.mode_of_payment, 'Credit Sale') = %(mode_only)s
                 )
 
-                -- 🔹 Sales type match
+                -- Sales type match (FINAL RULE)
                 AND (
                     (
-                        %(sales_type)s = 'Counter Sales'
-                        AND si.customer IN ('Walk-in Customer', 'Home Sales Customer')
+                        %(sales_type)s = 'Online Sales'
+                        AND si.customer IN ('HUNGER STATION', 'KETA', 'JAHEZ', 'TO YOU')
                     )
                     OR
                     (
-                        %(sales_type)s = 'Online Sales'
-                        AND si.customer NOT IN ('Walk-in Customer', 'Home Sales Customer')
+                        %(sales_type)s = 'Counter Sales'
+                        AND si.customer NOT IN ('HUNGER STATION', 'KETA', 'JAHEZ', 'TO YOU')
                     )
                 )
 
@@ -167,11 +179,21 @@ def execute(filters=None):
 
         for inv in invoices:
             data.append({
-                "name": inv.name,        # display text
-                "invoice": inv.name,     # clickable link
+                "name": inv.name,
+                "invoice": inv.name,
                 "parent": p.parent_name,
                 "amount": inv.grand_total,
                 "indent": 1
             })
+
+    # -------------------------------------------------
+    # 🔹 GRAND TOTAL ROW
+    # -------------------------------------------------
+    data.append({
+        "name": "<b style='font-size:14px'>TOTAL</b>",
+        "parent": None,
+        "amount": grand_total,
+        "indent": 0
+    })
 
     return columns, data
