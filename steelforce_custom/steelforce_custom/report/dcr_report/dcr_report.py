@@ -7,11 +7,11 @@ import frappe
 def color_parent_name(name):
     """Apply color based on sales type"""
     if name.startswith("Online Sales"):
-        return f"<span style='color:#2ca02c; font-weight:600'>{name}</span>"  # Green
+        return f"<span style='color:#2ca02c; font-weight:600'>{name}</span>"
     if name.startswith("Home Sales"):
-        return f"<span style='color:#ff7f0e; font-weight:600'>{name}</span>"  # Orange
+        return f"<span style='color:#ff7f0e; font-weight:600'>{name}</span>"
     if name.startswith("Counter Sales"):
-        return f"<span style='color:#1f77b4; font-weight:600'>{name}</span>"  # Blue
+        return f"<span style='color:#1f77b4; font-weight:600'>{name}</span>"
     return name
 
 
@@ -49,10 +49,10 @@ def execute(filters=None):
     ]
 
     data = []
-    grand_total = 0
+    grand_total = 0  # TOTAL with VAT
 
     # -------------------------------------------------
-    # 🔹 PARENTS → SALES TYPE + MODE OF PAYMENT
+    # 🔹 PARENTS (Sales Type + Mode of Payment)
     # -------------------------------------------------
     parents = frappe.db.sql("""
         SELECT
@@ -62,12 +62,10 @@ def execute(filters=None):
                         CASE
                             WHEN si.customer IN ('HUNGER STATION', 'KETA', 'JAHEZ', 'TO YOU')
                                 THEN 'Online Sales'
-                            WHEN si.customer = 'Home Customer'
-                                THEN 'Home Sales'
                             WHEN si.customer = 'Walk-in Customer'
                                 THEN 'Counter Sales'
                             ELSE
-                                'Counter Sales'
+                                'Home Sales'
                         END,
                         ' - ',
                         IFNULL(sip.mode_of_payment, 'Credit Sale'),
@@ -78,12 +76,10 @@ def execute(filters=None):
                         CASE
                             WHEN si.customer IN ('HUNGER STATION', 'KETA', 'JAHEZ', 'TO YOU')
                                 THEN 'Online Sales'
-                            WHEN si.customer = 'Home Customer'
-                                THEN 'Home Sales'
                             WHEN si.customer = 'Walk-in Customer'
                                 THEN 'Counter Sales'
                             ELSE
-                                'Counter Sales'
+                                'Home Sales'
                         END,
                         ' - ',
                         IFNULL(sip.mode_of_payment, 'Credit Sale')
@@ -124,7 +120,6 @@ def execute(filters=None):
     # 🔹 BUILD TREE
     # -------------------------------------------------
     for p in parents:
-        # Parent row (colored)
         data.append({
             "name": color_parent_name(p.parent_name),
             "parent": None,
@@ -137,31 +132,23 @@ def execute(filters=None):
         sales_type = p.parent_name.split(" - ")[0]
         mode_only = p.parent_name.split(" - ")[-1].replace(" (Return)", "")
 
-        # -------------------------------------------------
-        # 🔹 CHILDREN → SALES INVOICES
-        # -------------------------------------------------
         invoices = frappe.db.sql("""
-            SELECT
-                si.name,
-                si.grand_total
+            SELECT si.name, si.grand_total
             FROM `tabSales Invoice` si
             LEFT JOIN `tabSales Invoice Payment` sip
                 ON sip.parent = si.name
                 AND sip.parenttype = 'Sales Invoice'
                 AND sip.parentfield = 'payments'
-
             WHERE
                 si.docstatus = 1
                 AND si.is_pos = 1
                 AND si.pos_profile = %(pos_profile)s
                 AND si.posting_date BETWEEN %(from_date)s AND %(to_date)s
                 AND si.is_return = %(is_return)s
-
                 AND (
                     (%(mode)s LIKE '%%Credit Sale%%' AND sip.name IS NULL)
                     OR IFNULL(sip.mode_of_payment, 'Credit Sale') = %(mode_only)s
                 )
-
                 AND (
                     (
                         %(sales_type)s = 'Online Sales'
@@ -169,18 +156,17 @@ def execute(filters=None):
                     )
                     OR
                     (
-                        %(sales_type)s = 'Home Sales'
-                        AND si.customer = 'Home Customer'
+                        %(sales_type)s = 'Counter Sales'
+                        AND si.customer = 'Walk-in Customer'
                     )
                     OR
                     (
-                        %(sales_type)s = 'Counter Sales'
+                        %(sales_type)s = 'Home Sales'
                         AND si.customer NOT IN (
-                            'HUNGER STATION', 'KETA', 'JAHEZ', 'TO YOU', 'Home Customer'
+                            'HUNGER STATION', 'KETA', 'JAHEZ', 'TO YOU', 'Walk-in Customer'
                         )
                     )
                 )
-
             ORDER BY si.name
         """, {
             "from_date": from_date,
@@ -202,13 +188,30 @@ def execute(filters=None):
             })
 
     # -------------------------------------------------
-    # 🔹 GRAND TOTAL ROW
+    # 🔹 FINAL SUMMARY (CORRECT FORMULA)
     # -------------------------------------------------
-    data.append({
-        "name": "<b style='font-size:14px'>TOTAL</b>",
-        "parent": None,
-        "amount": grand_total,
-        "indent": 0
-    })
+    vat_amount = round(grand_total * 0.15 / 1.15, 2)
+    total_wo_vat = round(grand_total - vat_amount, 2)
+
+    data.extend([
+        {
+            "name": "<b>Total W/O VAT</b>",
+            "parent": None,
+            "amount": total_wo_vat,
+            "indent": 0
+        },
+        {
+            "name": "<b>Total VAT (15%)</b>",
+            "parent": None,
+            "amount": vat_amount,
+            "indent": 0
+        },
+        {
+            "name": "<b style='font-size:14px'>TOTAL</b>",
+            "parent": None,
+            "amount": grand_total,
+            "indent": 0
+        }
+    ])
 
     return columns, data

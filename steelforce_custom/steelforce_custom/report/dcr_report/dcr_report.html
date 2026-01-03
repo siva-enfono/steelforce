@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>POS Sales Summary</title>
+
+<style>
+/* =========================
+   ROLL PAPER SETTINGS
+   ========================= */
+@page {
+  size: 80mm auto;   /* 👉 change to 58mm auto if needed */
+  margin: 3mm;
+}
+
+body {
+  font-family: Arial, sans-serif;
+  font-size: 11px;
+  width: 80mm;      /* 👉 match page width */
+  margin: 0;
+  padding: 0;
+}
+
+/* =========================
+   TABLE
+   ========================= */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 6px;
+}
+
+th, td {
+  padding: 4px 2px;
+  font-size: 11px;
+}
+
+/* Header line only */
+th {
+  border-bottom: 1px solid #000;
+  font-weight: bold;
+  text-align: left;
+}
+
+/* No full borders (thermal safe) */
+td {
+  border: none;
+}
+
+/* =========================
+   ALIGNMENTS
+   ========================= */
+.text-right {
+  text-align: right;
+}
+
+/* =========================
+   ROW TYPES
+   ========================= */
+.parent {
+  font-weight: bold;
+  border-top: 1px dashed #000;
+}
+
+.child td:first-child {
+  padding-left: 10px;
+}
+
+.summary {
+  font-weight: bold;
+  border-top: 1px solid #000;
+}
+
+.grand-total {
+  font-size: 13px;
+  font-weight: bold;
+  border-top: 2px solid #000;
+  padding-top: 4px;
+}
+
+/* =========================
+   HEADER
+   ========================= */
+.title {
+  text-align: center;
+  font-size: 14px;
+  font-weight: bold;
+  margin-bottom: 4px;
+}
+
+.period {
+  text-align: center;
+  font-size: 11px;
+  margin-bottom: 6px;
+  font-weight: bold;
+}
+</style>
+</head>
+
+<body>
+
+<div class="title">
+  POS SALES SUMMARY
+</div>
+
+<div class="period">
+{% if (filters.from_date && filters.to_date) { %}
+  {%= frappe.datetime.str_to_user(filters.from_date) %}
+  TO
+  {%= frappe.datetime.str_to_user(filters.to_date) %}
+{% } %}
+</div>
+
+<table>
+<thead>
+<tr>
+  <th>Sales / Mode / Invoice</th>
+  <th class="text-right">Amt</th>
+</tr>
+</thead>
+
+<tbody>
+
+{% for (var i = 0; i < data.length; i++) { 
+    var row = data[i];
+%}
+
+  {% if (row.indent === 0 && !row.invoice) { %}
+    <tr class="parent">
+      <td>{%= row.name %}</td>
+      <td class="text-right">{%= (row.amount || 0).toFixed(2) %}</td>
+    </tr>
+
+  {% } else if (row.indent === 1) { %}
+    <tr class="child">
+      <td>{%= row.name %}</td>
+      <td class="text-right">{%= (row.amount || 0).toFixed(2) %}</td>
+    </tr>
+
+  {% } else { %}
+    <tr class="
+      {% if (row.name && row.name.indexOf('VAT') !== -1) { %}summary{% } %}
+      {% if (row.name && row.name.indexOf('TOTAL') !== -1) { %}grand-total{% } %}
+    ">
+      <td>{%= row.name %}</td>
+      <td class="text-right">{%= (row.amount || 0).toFixed(2) %}</td>
+    </tr>
+  {% } %}
+
+{% } %}
+
+</tbody>
+</table>
+
+</body>
+</html>
