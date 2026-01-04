@@ -104,7 +104,6 @@ def execute(filters=None):
 
         WHERE
             si.docstatus = 1
-            AND si.is_pos = 1
             AND si.pos_profile = %(pos_profile)s
             AND si.posting_date BETWEEN %(from_date)s AND %(to_date)s
 
@@ -141,7 +140,6 @@ def execute(filters=None):
                 AND sip.parentfield = 'payments'
             WHERE
                 si.docstatus = 1
-                AND si.is_pos = 1
                 AND si.pos_profile = %(pos_profile)s
                 AND si.posting_date BETWEEN %(from_date)s AND %(to_date)s
                 AND si.is_return = %(is_return)s
