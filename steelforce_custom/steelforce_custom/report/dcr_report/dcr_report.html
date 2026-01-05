@@ -9,16 +9,56 @@
    ROLL PAPER SETTINGS
    ========================= */
 @page {
-  size: 80mm auto;   /* 👉 change to 58mm auto if needed */
+  size: 80mm auto;   /* change to 58mm auto if needed */
   margin: 3mm;
 }
 
 body {
   font-family: Arial, sans-serif;
   font-size: 11px;
-  width: 80mm;      /* 👉 match page width */
+  font-weight: 600;
+  width: 80mm;
   margin: 0;
   padding: 0;
+}
+
+/* =========================
+   LOGO (SMALL)
+   ========================= */
+.logo {
+  text-align: center;
+  margin-bottom: 4px;
+}
+
+.logo img {
+  max-width: 45mm;
+  max-height: 18mm;
+  height: auto;
+  width: auto;
+}
+
+/* =========================
+   HEADER
+   ========================= */
+.title {
+  text-align: center;
+  font-size: 14px;
+  font-weight: 800;
+  margin-bottom: 2px;
+}
+
+.pos-profile {
+  text-align: center;
+  font-size: 11px;
+  font-weight: 700;
+  margin-bottom: 2px;
+}
+
+.period {
+  text-align: center;
+  font-size: 11px;
+  font-weight: 700;
+  margin-bottom: 6px;
 }
 
 /* =========================
@@ -33,16 +73,15 @@ table {
 th, td {
   padding: 4px 2px;
   font-size: 11px;
+  font-weight: 600;
 }
 
-/* Header line only */
 th {
   border-bottom: 1px solid #000;
-  font-weight: bold;
+  font-weight: 700;
   text-align: left;
 }
 
-/* No full borders (thermal safe) */
 td {
   border: none;
 }
@@ -58,7 +97,7 @@ td {
    ROW TYPES
    ========================= */
 .parent {
-  font-weight: bold;
+  font-weight: 700;
   border-top: 1px dashed #000;
 }
 
@@ -67,42 +106,39 @@ td {
 }
 
 .summary {
-  font-weight: bold;
+  font-weight: 700;
   border-top: 1px solid #000;
 }
 
 .grand-total {
   font-size: 13px;
-  font-weight: bold;
+  font-weight: 800;
   border-top: 2px solid #000;
   padding-top: 4px;
-}
-
-/* =========================
-   HEADER
-   ========================= */
-.title {
-  text-align: center;
-  font-size: 14px;
-  font-weight: bold;
-  margin-bottom: 4px;
-}
-
-.period {
-  text-align: center;
-  font-size: 11px;
-  margin-bottom: 6px;
-  font-weight: bold;
 }
 </style>
 </head>
 
 <body>
 
+<!-- LOGO -->
+<div class="logo">
+  <img src="https://altabiah.b.frappe.cloud/files/logo_Final_page-0001.jpg">
+</div>
+
+<!-- TITLE -->
 <div class="title">
   POS SALES SUMMARY
 </div>
 
+<!-- POS PROFILE -->
+{% if (filters.pos_profile) { %}
+<div class="pos-profile">
+  Branch : {%= filters.pos_profile %}
+</div>
+{% } %}
+
+<!-- PERIOD -->
 <div class="period">
 {% if (filters.from_date && filters.to_date) { %}
   {%= frappe.datetime.str_to_user(filters.from_date) %}
