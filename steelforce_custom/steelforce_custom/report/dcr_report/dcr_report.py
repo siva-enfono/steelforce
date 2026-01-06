@@ -49,7 +49,7 @@ def execute(filters=None):
     ]
 
     data = []
-    grand_total = 0  # TOTAL with VAT
+    grand_total = 0
 
     # -------------------------------------------------
     # 🔹 PARENTS (Sales Type + Mode of Payment)
@@ -91,8 +91,8 @@ def execute(filters=None):
             SUM(
                 CASE
                     WHEN sip.mode_of_payment IS NULL
-                        THEN IFNULL(si.grand_total, 0)
-                    ELSE IFNULL(sip.amount, 0) - IFNULL(si.change_amount, 0)
+                        THEN si.grand_total
+                    ELSE sip.amount
                 END
             ) AS amount
 
@@ -131,22 +131,35 @@ def execute(filters=None):
         sales_type = p.parent_name.split(" - ")[0]
         mode_only = p.parent_name.split(" - ")[-1].replace(" (Return)", "")
 
+        # -------------------------------------------------
+        # 🔹 INVOICES (MODE-WISE AMOUNT)
+        # -------------------------------------------------
         invoices = frappe.db.sql("""
-            SELECT si.name, si.grand_total
+            SELECT
+                si.name,
+                CASE
+                    WHEN sip.mode_of_payment IS NULL
+                        THEN si.grand_total
+                    ELSE sip.amount
+                END AS amount
             FROM `tabSales Invoice` si
             LEFT JOIN `tabSales Invoice Payment` sip
                 ON sip.parent = si.name
                 AND sip.parenttype = 'Sales Invoice'
                 AND sip.parentfield = 'payments'
+                AND IFNULL(sip.mode_of_payment, 'Credit Sale') = %(mode_only)s
+
             WHERE
                 si.docstatus = 1
                 AND si.pos_profile = %(pos_profile)s
                 AND si.posting_date BETWEEN %(from_date)s AND %(to_date)s
                 AND si.is_return = %(is_return)s
+
                 AND (
-                    (%(mode)s LIKE '%%Credit Sale%%' AND sip.name IS NULL)
-                    OR IFNULL(sip.mode_of_payment, 'Credit Sale') = %(mode_only)s
+                    (%(mode_only)s = 'Credit Sale' AND sip.name IS NULL)
+                    OR sip.mode_of_payment = %(mode_only)s
                 )
+
                 AND (
                     (
                         %(sales_type)s = 'Online Sales'
@@ -165,13 +178,13 @@ def execute(filters=None):
                         )
                     )
                 )
+
             ORDER BY si.name
         """, {
             "from_date": from_date,
             "to_date": to_date,
             "pos_profile": pos_profile,
             "is_return": p.is_return,
-            "mode": p.parent_name,
             "mode_only": mode_only,
             "sales_type": sales_type
         }, as_dict=True)
@@ -181,12 +194,12 @@ def execute(filters=None):
                 "name": inv.name,
                 "invoice": inv.name,
                 "parent": p.parent_name,
-                "amount": inv.grand_total,
+                "amount": inv.amount,
                 "indent": 1
             })
 
     # -------------------------------------------------
-    # 🔹 FINAL SUMMARY (CORRECT FORMULA)
+    # 🔹 FINAL SUMMARY
     # -------------------------------------------------
     vat_amount = round(grand_total * 0.15 / 1.15, 2)
     total_wo_vat = round(grand_total - vat_amount, 2)
