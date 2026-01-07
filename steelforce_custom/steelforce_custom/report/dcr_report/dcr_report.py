@@ -26,7 +26,7 @@ def execute(filters=None):
     # -------------------------------------------------
     # 🔹 BUSINESS DAY WINDOW (03:00 → 03:00)
     # -------------------------------------------------
-    from_datetime = datetime.combine(getdate(from_date), time(0, 0, 0))
+    from_datetime = datetime.combine(getdate(from_date), time(3, 0, 0))
     to_datetime = datetime.combine(add_days(getdate(to_date), 1), time(3, 0, 0))
 
     # -------------------------------------------------
@@ -40,6 +40,9 @@ def execute(filters=None):
 
     data = []
     grand_total = 0
+
+    total_cash_counter_home = 0
+    total_card_counter_home = 0
 
     # -------------------------------------------------
     # 🔹 PARENT LEVEL
@@ -119,6 +122,13 @@ def execute(filters=None):
 
         sales_type = p.parent_name.split(" - ")[0]
         mode_only = p.parent_name.split(" - ")[-1].replace(" (Return)", "")
+
+        # 🔹 Total Cash / Card (Counter + Home only)
+        if sales_type in ("Counter Sales", "Home Sales"):
+            if mode_only.startswith("Cash"):
+                total_cash_counter_home += p.amount or 0
+            elif mode_only not in ("Credit Sale",):
+                total_card_counter_home += p.amount or 0
 
         invoices = frappe.db.sql("""
             SELECT
@@ -204,6 +214,9 @@ def execute(filters=None):
     total_wo_vat = round(grand_total - vat_amount, 2)
 
     data.extend([
+        {"name": "<b>Total Cash (Counter + Home)</b>", "amount": total_cash_counter_home, "indent": 0},
+        {"name": "<b>Total Card (Counter + Home)</b>", "amount": total_card_counter_home, "indent": 0},
+
         {"name": "<b>Total W/O VAT</b>", "amount": total_wo_vat, "indent": 0},
         {"name": "<b>Total VAT (15%)</b>", "amount": vat_amount, "indent": 0},
         {"name": "<b style='font-size:14px'>TOTAL</b>", "amount": grand_total, "indent": 0},
