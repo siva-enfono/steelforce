@@ -1,5 +1,5 @@
 {
- "add_total_row": 0,
+ "add_total_row": 1,
  "columns": [],
  "creation": "2026-01-10 16:49:50.838230",
  "disabled": 0,
@@ -10,7 +10,7 @@
  "is_standard": "Yes",
  "letter_head": "HSM",
  "letterhead": null,
- "modified": "2026-01-10 16:49:50.838230",
+ "modified": "2026-01-10 17:58:57.281223",
  "modified_by": "Administrator",
  "module": "Steelforce Custom",
  "name": "DCR-Accounts",

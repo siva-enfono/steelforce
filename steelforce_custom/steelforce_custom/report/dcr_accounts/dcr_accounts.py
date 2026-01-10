@@ -44,20 +44,20 @@ def execute(filters=None):
             "fieldname": "pos_profile",
             "fieldtype": "Link",
             "options": "POS Profile",
-            "width": 100,
+            "width": 80,
         },
         {
             "label": "Invoice",
             "fieldname": "invoice",
             "fieldtype": "Link",
             "options": "Sales Invoice",
-            "width": 150,
+            "width": 120,
         },
         {
             "label": "Invoice Amount",
             "fieldname": "grand_total",
             "fieldtype": "Currency",
-            "width": 120,
+            "width": 140,
         },
 
         {"label": "Walk-in Cash", "fieldname": "walkin_cash", "fieldtype": "Currency", "width": 120},
@@ -66,7 +66,7 @@ def execute(filters=None):
         {"label": "Home Cash", "fieldname": "home_cash", "fieldtype": "Currency", "width": 120},
         {"label": "Home Card", "fieldname": "home_card", "fieldtype": "Currency", "width": 120},
 
-        {"label": "HUNGER STATION", "fieldname": "hunger_station", "fieldtype": "Currency", "width": 140},
+        {"label": "HUNGER STATION", "fieldname": "hunger_station", "fieldtype": "Currency", "width": 150},
         {"label": "KEETA", "fieldname": "keeta", "fieldtype": "Currency", "width": 120},
         {"label": "JAHEZ", "fieldname": "jahez", "fieldtype": "Currency", "width": 120},
         {"label": "TO YOU", "fieldname": "to_you", "fieldtype": "Currency", "width": 120},
