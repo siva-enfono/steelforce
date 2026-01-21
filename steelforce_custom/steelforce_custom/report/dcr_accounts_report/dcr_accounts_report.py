@@ -45,20 +45,8 @@ def execute(filters=None):
     # -------------------------
     columns = [
         {"label": "Date", "fieldname": "posting_date", "fieldtype": "Date", "width": 110},
-        {
-            "label": "Branch",
-            "fieldname": "pos_profile",
-            "fieldtype": "Link",
-            "options": "POS Profile",
-            "width": 80,
-        },
-        {
-            "label": "Invoice",
-            "fieldname": "invoice",
-            "fieldtype": "Link",
-            "options": "Sales Invoice",
-            "width": 120,
-        },
+        {"label": "Branch", "fieldname": "pos_profile", "fieldtype": "Link", "options": "POS Profile", "width": 80},
+        {"label": "Invoice", "fieldname": "invoice", "fieldtype": "Link", "options": "Sales Invoice", "width": 120},
         {"label": "Invoice Amount", "fieldname": "grand_total", "fieldtype": "Currency", "width": 140},
 
         {"label": "Walk-in Cash", "fieldname": "walkin_cash", "fieldtype": "Currency", "width": 120},
@@ -66,7 +54,6 @@ def execute(filters=None):
 
         {"label": "Home Cash", "fieldname": "home_cash", "fieldtype": "Currency", "width": 120},
         {"label": "Home Card", "fieldname": "home_card", "fieldtype": "Currency", "width": 120},
-
         {"label": "Home Credit", "fieldname": "home_credit", "fieldtype": "Currency", "width": 120},
 
         {"label": "HUNGER STATION", "fieldname": "hunger_station", "fieldtype": "Currency", "width": 150},
@@ -86,7 +73,7 @@ def execute(filters=None):
             si.grand_total,
 
             /* =========================
-               WALK-IN CASH
+               WALK-IN CASH (POS)
             ==========================*/
             CASE
                 WHEN si.customer = 'Walk-in Customer'
@@ -116,37 +103,58 @@ def execute(filters=None):
             END AS walkin_card,
 
             /* =========================
-               HOME CASH
+               HOME CASH (POS OR PAYMENT ENTRY)
             ==========================*/
             CASE
                 WHEN si.customer NOT IN ('HUNGER STATION','KETA','JAHEZ','TO YOU','Walk-in Customer')
                  AND (
-                     (si.pos_profile = 'Saihat' AND EXISTS (
-                         SELECT 1 FROM `tabSales Invoice Payment`
-                         WHERE parent = si.name AND mode_of_payment = 'Cash-Saihat'
-                     ))
-                  OR (si.pos_profile = 'Faisaliya' AND EXISTS (
-                         SELECT 1 FROM `tabSales Invoice Payment`
-                         WHERE parent = si.name AND mode_of_payment = 'Cash-FA'
-                     ))
-                  OR (si.pos_profile = 'Doha' AND EXISTS (
-                         SELECT 1 FROM `tabSales Invoice Payment`
-                         WHERE parent = si.name AND mode_of_payment = 'Cash-Doha'
-                     ))
+                     /* POS CASH */
+                     (
+                         (si.pos_profile = 'Saihat' AND EXISTS (
+                             SELECT 1 FROM `tabSales Invoice Payment`
+                             WHERE parent = si.name AND mode_of_payment = 'Cash-Saihat'
+                         ))
+                      OR (si.pos_profile = 'Faisaliya' AND EXISTS (
+                             SELECT 1 FROM `tabSales Invoice Payment`
+                             WHERE parent = si.name AND mode_of_payment = 'Cash-FA'
+                         ))
+                      OR (si.pos_profile = 'Doha' AND EXISTS (
+                             SELECT 1 FROM `tabSales Invoice Payment`
+                             WHERE parent = si.name AND mode_of_payment = 'Cash-Doha'
+                         ))
+                     )
+                     /* PAYMENT ENTRY CASH */
+                     OR pe_pay.mop = 'Cash'
                  )
-                THEN (IFNULL(si.paid_amount,0) - IFNULL(si.change_amount,0)) - IFNULL(card.card_amount,0)
+                THEN
+                    CASE
+                        WHEN IFNULL(card.card_amount,0) > 0
+                        THEN (IFNULL(si.paid_amount,0) - IFNULL(si.change_amount,0)) - IFNULL(card.card_amount,0)
+                        ELSE IFNULL(pe_pay.paid_amount, si.grand_total)
+                    END
                 ELSE 0
             END AS home_cash,
 
-            /* HOME CARD */
+            /* =========================
+               HOME CARD (POS OR PAYMENT ENTRY)
+            ==========================*/
             CASE
                 WHEN si.customer NOT IN ('HUNGER STATION','KETA','JAHEZ','TO YOU','Walk-in Customer')
-                THEN IFNULL(card.card_amount,0)
+                 AND (
+                     IFNULL(card.card_amount,0) > 0
+                     OR pe_pay.mop = 'Card'
+                 )
+                THEN
+                    CASE
+                        WHEN IFNULL(card.card_amount,0) > 0
+                        THEN card.card_amount
+                        ELSE IFNULL(pe_pay.paid_amount, si.grand_total)
+                    END
                 ELSE 0
             END AS home_card,
 
             /* =========================
-               HOME CREDIT
+               HOME CREDIT (ONLY IF NO POS & NO PE)
             ==========================*/
             CASE
                 WHEN si.customer NOT IN ('HUNGER STATION','KETA','JAHEZ','TO YOU','Walk-in Customer')
@@ -158,6 +166,7 @@ def execute(filters=None):
                           'Card-SA','Card-FA','Card-DO'
                       )
                  )
+                 AND pe_pay.invoice IS NULL
                 THEN si.grand_total
                 ELSE 0
             END AS home_credit,
@@ -172,7 +181,7 @@ def execute(filters=None):
 
         FROM `tabSales Invoice` si
 
-        /* -------- CARD AMOUNT LOGIC -------- */
+        /* -------- POS CARD AMOUNT -------- */
         LEFT JOIN (
             SELECT
                 sip.parent AS invoice,
@@ -185,6 +194,29 @@ def execute(filters=None):
                 OR (si2.pos_profile = 'Doha' AND sip.mode_of_payment IN ('Card-DO','Card-FA'))
             GROUP BY sip.parent
         ) card ON card.invoice = si.name
+
+        /* -------- PAYMENT ENTRY (FOR HOME CREDIT) -------- */
+        LEFT JOIN (
+            SELECT
+                per.reference_name AS invoice,
+
+                CASE
+                    WHEN MAX(pe.mode_of_payment) LIKE 'Cash%%' THEN 'Cash'
+                    WHEN MAX(pe.mode_of_payment) LIKE 'Card%%'
+                      OR MAX(pe.mode_of_payment) LIKE 'Mada%%'
+                      OR MAX(pe.mode_of_payment) LIKE 'Visa%%'
+                        THEN 'Card'
+                    ELSE MAX(pe.mode_of_payment)
+                END AS mop,
+
+                SUM(per.allocated_amount) AS paid_amount
+
+            FROM `tabPayment Entry Reference` per
+            JOIN `tabPayment Entry` pe ON pe.name = per.parent
+            WHERE per.reference_doctype = 'Sales Invoice'
+              AND pe.docstatus = 1
+            GROUP BY per.reference_name
+        ) pe_pay ON pe_pay.invoice = si.name
 
         WHERE si.docstatus = 1
         {where_clause}
