@@ -39,7 +39,7 @@ def execute(filters=None):
     total_card_counter_home = 0
 
     # -------------------------------------------------
-    # 🔹 PARENT LEVEL (PE > POS > CREDIT, CASH = PAID - CHANGE)
+    # 🔹 PARENT LEVEL (PE > POS > CREDIT)
     # -------------------------------------------------
     parents = frappe.db.sql("""
         SELECT
@@ -132,7 +132,7 @@ def execute(filters=None):
                 total_card_counter_home += p.amount or 0
 
         # -------------------------------------------------
-        # 🔹 INVOICE LEVEL (SAME LOGIC)
+        # 🔹 INVOICE LEVEL (SAME PRIORITY)
         # -------------------------------------------------
         invoices = frappe.db.sql("""
             SELECT
