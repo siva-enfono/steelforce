@@ -23,6 +23,9 @@ def execute(filters=None):
     from_datetime = datetime.combine(getdate(from_date), time(3, 0, 0))
     to_datetime = datetime.combine(add_days(getdate(to_date), 1), time(3, 0, 0))
 
+    # -------------------------------------------------
+    # COLUMNS
+    # -------------------------------------------------
     columns = [
         {"fieldname": "name", "label": "Sales Type / Mode of Payment / Invoice", "fieldtype": "Data", "width": 360},
         {"fieldname": "amount", "label": "Amount", "fieldtype": "Currency", "width": 180},
@@ -35,7 +38,7 @@ def execute(filters=None):
     total_card_counter_home = 0
 
     # -------------------------------------------------
-    # 🔹 PARENT LEVEL (PE > POS > CREDIT)
+    # 🔹 PARENT LEVEL (PE > POS > CREDIT, CASH BY TYPE)
     # -------------------------------------------------
     parents = frappe.db.sql("""
         SELECT
@@ -56,42 +59,52 @@ def execute(filters=None):
 
             SUM(
                 CASE
+                    -- PAYMENT ENTRY (never deduct change)
                     WHEN pe.amount IS NOT NULL THEN
-                        CASE
-                            WHEN pe.mop = 'Cash'
-                                THEN pe.amount - IFNULL(si.change_amount, 0)
-                            ELSE pe.amount
-                        END
+                        pe.amount
 
+                    -- POS PAYMENT (deduct change only if CASH TYPE)
                     WHEN pos.amount IS NOT NULL THEN
                         CASE
-                            WHEN pos.mop = 'Cash'
+                            WHEN pos.mop_type = 'Cash'
                                 THEN pos.amount - IFNULL(si.change_amount, 0)
                             ELSE pos.amount
                         END
 
+                    -- CREDIT
                     ELSE si.grand_total
                 END
             ) AS amount
 
         FROM `tabSales Invoice` si
 
+        /* -------- POS PAYMENTS WITH MOP TYPE -------- */
         LEFT JOIN (
-            SELECT parent AS invoice, mode_of_payment AS mop, SUM(amount) AS amount
-            FROM `tabSales Invoice Payment`
-            GROUP BY parent, mode_of_payment
+            SELECT
+                sip.parent AS invoice,
+                sip.mode_of_payment AS mop,
+                mop_doc.type AS mop_type,
+                SUM(sip.amount) AS amount
+            FROM `tabSales Invoice Payment` sip
+            LEFT JOIN `tabMode of Payment` mop_doc
+                ON mop_doc.name = sip.mode_of_payment
+            GROUP BY sip.parent, sip.mode_of_payment, mop_doc.type
         ) pos ON pos.invoice = si.name
 
+        /* -------- PAYMENT ENTRY WITH MOP TYPE -------- */
         LEFT JOIN (
             SELECT
                 per.reference_name AS invoice,
                 pe.mode_of_payment AS mop,
+                mop_doc.type AS mop_type,
                 SUM(per.allocated_amount) AS amount
             FROM `tabPayment Entry Reference` per
             JOIN `tabPayment Entry` pe ON pe.name = per.parent
+            LEFT JOIN `tabMode of Payment` mop_doc
+                ON mop_doc.name = pe.mode_of_payment
             WHERE per.reference_doctype = 'Sales Invoice'
               AND pe.docstatus = 1
-            GROUP BY per.reference_name, pe.mode_of_payment
+            GROUP BY per.reference_name, pe.mode_of_payment, mop_doc.type
         ) pe ON pe.invoice = si.name
 
         WHERE
@@ -125,13 +138,14 @@ def execute(filters=None):
         mode_only = p.parent_name.split(" - ")[-1].replace(" (Return)", "")
 
         if sales_type in ("Counter Sales", "Home Sales"):
-            if mode_only == "Cash":
+            # cash-type detected already via parent grouping
+            if "Cash" in mode_only:
                 total_cash_counter_home += p.amount or 0
             elif mode_only != "Credit Sale":
                 total_card_counter_home += p.amount or 0
 
         # -------------------------------------------------
-        # 🔹 INVOICE LEVEL (PE > POS > CREDIT)
+        # 🔹 INVOICE LEVEL (PE > POS > CREDIT, CASH BY TYPE)
         # -------------------------------------------------
         invoices = frappe.db.sql("""
             SELECT
@@ -140,15 +154,11 @@ def execute(filters=None):
                 SUM(
                     CASE
                         WHEN pe.amount IS NOT NULL THEN
-                            CASE
-                                WHEN pe.mop = 'Cash'
-                                    THEN pe.amount - IFNULL(si.change_amount, 0)
-                                ELSE pe.amount
-                            END
+                            pe.amount
 
                         WHEN pos.amount IS NOT NULL THEN
                             CASE
-                                WHEN pos.mop = 'Cash'
+                                WHEN pos.mop_type = 'Cash'
                                     THEN pos.amount - IFNULL(si.change_amount, 0)
                                 ELSE pos.amount
                             END
@@ -160,21 +170,30 @@ def execute(filters=None):
             FROM `tabSales Invoice` si
 
             LEFT JOIN (
-                SELECT parent AS invoice, mode_of_payment AS mop, SUM(amount) AS amount
-                FROM `tabSales Invoice Payment`
-                GROUP BY parent, mode_of_payment
+                SELECT
+                    sip.parent AS invoice,
+                    sip.mode_of_payment AS mop,
+                    mop_doc.type AS mop_type,
+                    SUM(sip.amount) AS amount
+                FROM `tabSales Invoice Payment` sip
+                LEFT JOIN `tabMode of Payment` mop_doc
+                    ON mop_doc.name = sip.mode_of_payment
+                GROUP BY sip.parent, sip.mode_of_payment, mop_doc.type
             ) pos ON pos.invoice = si.name
 
             LEFT JOIN (
                 SELECT
                     per.reference_name AS invoice,
                     pe.mode_of_payment AS mop,
+                    mop_doc.type AS mop_type,
                     SUM(per.allocated_amount) AS amount
                 FROM `tabPayment Entry Reference` per
                 JOIN `tabPayment Entry` pe ON pe.name = per.parent
+                LEFT JOIN `tabMode of Payment` mop_doc
+                    ON mop_doc.name = pe.mode_of_payment
                 WHERE per.reference_doctype = 'Sales Invoice'
                   AND pe.docstatus = 1
-                GROUP BY per.reference_name, pe.mode_of_payment
+                GROUP BY per.reference_name, pe.mode_of_payment, mop_doc.type
             ) pe ON pe.invoice = si.name
 
             WHERE
