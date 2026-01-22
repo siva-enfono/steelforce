@@ -39,7 +39,7 @@ def execute(filters=None):
     total_card_counter_home = 0
 
     # -------------------------------------------------
-    # 🔹 PARENT LEVEL (PE > POS > CREDIT, CASH = PAID - CHANGE)
+    # 🔹 PARENT LEVEL (PE > POS > CREDIT)
     # -------------------------------------------------
     parents = frappe.db.sql("""
         SELECT
@@ -52,7 +52,7 @@ def execute(filters=None):
                     ELSE 'Home Sales'
                 END,
                 ' - ',
-                IFNULL(IFNULL(pe.mop, pos.mop), 'Credit Sale'),
+                IFNULL(IF(pe.mop IS NOT NULL, pe.mop, pos.mop), 'Credit Sale'),
                 IF(si.is_return = 1, ' (Return)', '')
             ) AS parent_name,
 
@@ -60,12 +60,21 @@ def execute(filters=None):
 
             SUM(
                 CASE
-                    WHEN IFNULL(pe.mop, pos.mop) = 'Cash'
-                        THEN IFNULL(pe.amount, pos.amount) - IFNULL(si.change_amount, 0)
-                    WHEN IFNULL(pe.mop, pos.mop) IS NOT NULL
-                        THEN IFNULL(pe.amount, pos.amount)
-                    ELSE
-                        si.grand_total
+                    WHEN pe.amount IS NOT NULL THEN
+                        CASE
+                            WHEN pe.mop = 'Cash'
+                                THEN pe.amount - IFNULL(si.change_amount, 0)
+                            ELSE pe.amount
+                        END
+
+                    WHEN pos.amount IS NOT NULL THEN
+                        CASE
+                            WHEN pos.mop = 'Cash'
+                                THEN pos.amount - IFNULL(si.change_amount, 0)
+                            ELSE pos.amount
+                        END
+
+                    ELSE si.grand_total
                 END
             ) AS amount
 
@@ -132,7 +141,7 @@ def execute(filters=None):
                 total_card_counter_home += p.amount or 0
 
         # -------------------------------------------------
-        # 🔹 INVOICE LEVEL (SAME LOGIC)
+        # 🔹 INVOICE LEVEL (PE > POS > CREDIT)
         # -------------------------------------------------
         invoices = frappe.db.sql("""
             SELECT
@@ -140,12 +149,21 @@ def execute(filters=None):
 
                 SUM(
                     CASE
-                        WHEN IFNULL(pe.mop, pos.mop) = 'Cash'
-                            THEN IFNULL(pe.amount, pos.amount) - IFNULL(si.change_amount, 0)
-                        WHEN IFNULL(pe.mop, pos.mop) IS NOT NULL
-                            THEN IFNULL(pe.amount, pos.amount)
-                        ELSE
-                            si.grand_total
+                        WHEN pe.amount IS NOT NULL THEN
+                            CASE
+                                WHEN pe.mop = 'Cash'
+                                    THEN pe.amount - IFNULL(si.change_amount, 0)
+                                ELSE pe.amount
+                            END
+
+                        WHEN pos.amount IS NOT NULL THEN
+                            CASE
+                                WHEN pos.mop = 'Cash'
+                                    THEN pos.amount - IFNULL(si.change_amount, 0)
+                                ELSE pos.amount
+                            END
+
+                        ELSE si.grand_total
                     END
                 ) AS amount
 
