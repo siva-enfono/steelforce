@@ -7,13 +7,7 @@ from datetime import datetime, time
 
 
 def color_parent_name(name):
-    if name.startswith("Online Sales"):
-        return f"<span style='color:#2ca02c; font-weight:600'>{name}</span>"
-    if name.startswith("Home Sales"):
-        return f"<span style='color:#ff7f0e; font-weight:600'>{name}</span>"
-    if name.startswith("Counter Sales"):
-        return f"<span style='color:#1f77b4; font-weight:600'>{name}</span>"
-    return name
+    return f"<span style='color:#000000; font-weight:600'>{name}</span>"
 
 
 def execute(filters=None):
@@ -45,7 +39,7 @@ def execute(filters=None):
     total_card_counter_home = 0
 
     # -------------------------------------------------
-    # 🔹 PARENT LEVEL (POS + PAYMENT ENTRY)
+    # 🔹 PARENT LEVEL (PE > POS > CREDIT)
     # -------------------------------------------------
     parents = frappe.db.sql("""
         SELECT
@@ -58,7 +52,7 @@ def execute(filters=None):
                     ELSE 'Home Sales'
                 END,
                 ' - ',
-                IFNULL(pos.mop, IFNULL(pe.mop, 'Credit Sale')),
+                IFNULL(IFNULL(pe.mop, pos.mop), 'Credit Sale'),
                 IF(si.is_return = 1, ' (Return)', '')
             ) AS parent_name,
 
@@ -66,10 +60,12 @@ def execute(filters=None):
 
             SUM(
                 CASE
-                    WHEN si.is_return = 1 THEN si.grand_total
-                    WHEN pos.mop IS NOT NULL THEN pos.amount
-                    WHEN pe.mop IS NOT NULL THEN pe.amount
-                    ELSE si.grand_total
+                    WHEN IFNULL(pe.mop, pos.mop) = 'Cash'
+                        THEN IFNULL(pe.amount, pos.amount) - IFNULL(si.change_amount, 0)
+                    WHEN IFNULL(pe.mop, pos.mop) IS NOT NULL
+                        THEN IFNULL(pe.amount, pos.amount)
+                    ELSE
+                        si.grand_total
                 END
             ) AS amount
 
@@ -78,24 +74,24 @@ def execute(filters=None):
         /* -------- POS PAYMENTS -------- */
         LEFT JOIN (
             SELECT
-                parent,
-                MAX(mode_of_payment) AS mop,
+                parent AS invoice,
+                mode_of_payment AS mop,
                 SUM(amount) AS amount
             FROM `tabSales Invoice Payment`
-            GROUP BY parent
-        ) pos ON pos.parent = si.name
+            GROUP BY parent, mode_of_payment
+        ) pos ON pos.invoice = si.name
 
         /* -------- PAYMENT ENTRY -------- */
         LEFT JOIN (
             SELECT
                 per.reference_name AS invoice,
-                MAX(pe.mode_of_payment) AS mop,
+                pe.mode_of_payment AS mop,
                 SUM(per.allocated_amount) AS amount
             FROM `tabPayment Entry Reference` per
             JOIN `tabPayment Entry` pe ON pe.name = per.parent
             WHERE per.reference_doctype = 'Sales Invoice'
               AND pe.docstatus = 1
-            GROUP BY per.reference_name
+            GROUP BY per.reference_name, pe.mode_of_payment
         ) pe ON pe.invoice = si.name
 
         WHERE
@@ -130,53 +126,50 @@ def execute(filters=None):
 
         # 🔹 Total Cash / Card (Counter + Home only)
         if sales_type in ("Counter Sales", "Home Sales"):
-            if mode_only.startswith("Cash"):
+            if mode_only.lower().startswith("cash"):
                 total_cash_counter_home += p.amount or 0
-            elif mode_only not in ("Credit Sale",):
+            elif mode_only != "Credit Sale":
                 total_card_counter_home += p.amount or 0
 
         # -------------------------------------------------
-        # 🔹 INVOICE LEVEL (POS + PAYMENT ENTRY)
+        # 🔹 INVOICE LEVEL (SAME PRIORITY)
         # -------------------------------------------------
         invoices = frappe.db.sql("""
             SELECT
                 si.name,
 
-                CASE
-                    WHEN si.is_return = 1 THEN si.grand_total
-
-                    WHEN pos.mop = %(mode)s THEN pos.amount
-                    WHEN pe.mop = %(mode)s THEN pe.amount
-
-                    WHEN %(mode)s = 'Credit Sale'
-                         AND pos.mop IS NULL
-                         AND pe.mop IS NULL
-                        THEN si.grand_total
-
-                    ELSE 0
-                END AS amount
+                SUM(
+                    CASE
+                        WHEN IFNULL(pe.mop, pos.mop) = 'Cash'
+                            THEN IFNULL(pe.amount, pos.amount) - IFNULL(si.change_amount, 0)
+                        WHEN IFNULL(pe.mop, pos.mop) IS NOT NULL
+                            THEN IFNULL(pe.amount, pos.amount)
+                        ELSE
+                            si.grand_total
+                    END
+                ) AS amount
 
             FROM `tabSales Invoice` si
 
             LEFT JOIN (
                 SELECT
-                    parent,
-                    MAX(mode_of_payment) AS mop,
+                    parent AS invoice,
+                    mode_of_payment AS mop,
                     SUM(amount) AS amount
                 FROM `tabSales Invoice Payment`
-                GROUP BY parent
-            ) pos ON pos.parent = si.name
+                GROUP BY parent, mode_of_payment
+            ) pos ON pos.invoice = si.name
 
             LEFT JOIN (
                 SELECT
                     per.reference_name AS invoice,
-                    MAX(pe.mode_of_payment) AS mop,
+                    pe.mode_of_payment AS mop,
                     SUM(per.allocated_amount) AS amount
                 FROM `tabPayment Entry Reference` per
                 JOIN `tabPayment Entry` pe ON pe.name = per.parent
                 WHERE per.reference_doctype = 'Sales Invoice'
                   AND pe.docstatus = 1
-                GROUP BY per.reference_name
+                GROUP BY per.reference_name, pe.mode_of_payment
             ) pe ON pe.invoice = si.name
 
             WHERE
@@ -187,9 +180,9 @@ def execute(filters=None):
                 AND si.is_return = %(is_return)s
 
                 AND (
-                    (%(mode)s = 'Credit Sale' AND pos.mop IS NULL AND pe.mop IS NULL)
-                    OR pos.mop = %(mode)s
+                    (%(mode)s = 'Credit Sale' AND pe.mop IS NULL AND pos.mop IS NULL)
                     OR pe.mop = %(mode)s
+                    OR pos.mop = %(mode)s
                 )
 
                 AND (
@@ -202,6 +195,7 @@ def execute(filters=None):
                             'HUNGER STATION','KETA','JAHEZ','TO YOU','Walk-in Customer'))
                 )
 
+            GROUP BY si.name
             ORDER BY si.name
         """, {
             "pos_profile": pos_profile,
@@ -231,7 +225,6 @@ def execute(filters=None):
     data.extend([
         {"name": "<b>Total Cash (Counter + Home)</b>", "amount": total_cash_counter_home, "indent": 0},
         {"name": "<b>Total Card (Counter + Home)</b>", "amount": total_card_counter_home, "indent": 0},
-
         {"name": "<b>Total W/O VAT</b>", "amount": total_wo_vat, "indent": 0},
         {"name": "<b>Total VAT (15%)</b>", "amount": vat_amount, "indent": 0},
         {"name": "<b style='font-size:14px'>TOTAL</b>", "amount": grand_total, "indent": 0},
