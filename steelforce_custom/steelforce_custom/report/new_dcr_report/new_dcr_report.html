@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>POS Sales Summary</title>
+
+<style>
+/* =========================
+   ROLL PAPER SETTINGS
+   ========================= */
+@page {
+  size: 80mm auto;   /* change to 58mm auto if needed */
+  margin: 3mm;
+}
+
+body {
+  font-family: Arial, sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  width: 80mm;
+  margin: 0;
+  padding: 0;
+}
+
+/* =========================
+   LOGO (SMALL)
+   ========================= */
+.logo {
+  text-align: center;
+  margin-bottom: 4px;
+}
+
+.logo img {
+  max-width: 45mm;
+  max-height: 18mm;
+  height: auto;
+  width: auto;
+}
+
+/* =========================
+   HEADER
+   ========================= */
+.title {
+  text-align: center;
+  font-size: 14px;
+  font-weight: 800;
+  margin-bottom: 2px;
+}
+
+.pos-profile {
+  text-align: center;
+  font-size: 11px;
+  font-weight: 700;
+  margin-bottom: 2px;
+}
+
+.period {
+  text-align: center;
+  font-size: 11px;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+/* =========================
+   TABLE
+   ========================= */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 6px;
+}
+
+th, td {
+  padding: 4px 2px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+th {
+  border-bottom: 1px solid #000;
+  font-weight: 700;
+  text-align: left;
+}
+
+td {
+  border: none;
+}
+
+/* =========================
+   ALIGNMENTS
+   ========================= */
+.text-right {
+  text-align: right;
+}
+
+/* =========================
+   ROW TYPES
+   ========================= */
+.parent {
+  font-weight: 700;
+  border-top: 1px dashed #000;
+}
+
+.child td:first-child {
+  padding-left: 10px;
+}
+
+.summary {
+  font-weight: 700;
+  border-top: 1px solid #000;
+}
+
+.grand-total {
+  font-size: 13px;
+  font-weight: 800;
+  border-top: 2px solid #000;
+  padding-top: 4px;
+}
+</style>
+</head>
+
+<body>
+
+<!-- LOGO -->
+<div class="logo">
+  <img src="https://altabiah.b.frappe.cloud/files/logo_Final_page-0001.jpg">
+</div>
+
+<!-- TITLE -->
+<div class="title">
+  POS SALES SUMMARY
+</div>
+
+<!-- POS PROFILE -->
+{% if (filters.pos_profile) { %}
+<div class="pos-profile">
+  Branch : {%= filters.pos_profile %}
+</div>
+{% } %}
+
+<!-- PERIOD -->
+<div class="period">
+{% if (filters.from_date && filters.to_date) { %}
+  {%= frappe.datetime.str_to_user(filters.from_date) %}
+  TO
+  {%= frappe.datetime.str_to_user(filters.to_date) %}
+{% } %}
+</div>
+
+<table>
+<thead>
+<tr>
+  <th>Sales / Mode / Invoice</th>
+  <th class="text-right">Amt</th>
+</tr>
+</thead>
+
+<tbody>
+
+{% for (var i = 0; i < data.length; i++) { 
+    var row = data[i];
+%}
+
+  {% if (row.indent === 0 && !row.invoice) { %}
+    <tr class="parent">
+      <td>{%= row.name %}</td>
+      <td class="text-right">{%= (row.amount || 0).toFixed(2) %}</td>
+    </tr>
+
+  {% } else if (row.indent === 1) { %}
+    <tr class="child">
+      <td>{%= row.name %}</td>
+      <td class="text-right">{%= (row.amount || 0).toFixed(2) %}</td>
+    </tr>
+
+  {% } else { %}
+    <tr class="
+      {% if (row.name && row.name.indexOf('VAT') !== -1) { %}summary{% } %}
+      {% if (row.name && row.name.indexOf('TOTAL') !== -1) { %}grand-total{% } %}
+    ">
+      <td>{%= row.name %}</td>
+      <td class="text-right">{%= (row.amount || 0).toFixed(2) %}</td>
+    </tr>
+  {% } %}
+
+{% } %}
+
+</tbody>
+</table>
+
+</body>
+</html>
