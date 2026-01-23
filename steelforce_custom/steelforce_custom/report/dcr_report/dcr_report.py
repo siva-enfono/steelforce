@@ -17,6 +17,14 @@ def execute(filters=None):
     to_date = filters.get("to_date")
     pos_profile = filters.get("pos_profile")
 
+    # -------------------------------------------------
+    # POS PROFILE WAREHOUSE
+    # -------------------------------------------------
+    pos_warehouse = frappe.db.get_value("POS Profile", pos_profile, "warehouse")
+
+    # -------------------------------------------------
+    # BUSINESS DAY WINDOW (03:00 → 03:00)
+    # -------------------------------------------------
     from_datetime = datetime.combine(getdate(from_date), time(3, 0, 0))
     to_datetime = datetime.combine(add_days(getdate(to_date), 1), time(3, 0, 0))
 
@@ -62,6 +70,7 @@ def execute(filters=None):
 
     # -------------------------------------------------
     # 🔹 ADVANCE FROM PAYMENT ENTRY AGAINST SALES ORDER
+    #    (ONLY IF SO WAREHOUSE = POS WAREHOUSE)
     # -------------------------------------------------
     advances = frappe.db.sql("""
         SELECT
@@ -71,15 +80,18 @@ def execute(filters=None):
             SUM(per.allocated_amount) AS amount
         FROM `tabPayment Entry Reference` per
         JOIN `tabPayment Entry` pe ON pe.name = per.parent
+        JOIN `tabSales Order` so ON so.name = per.reference_name
         LEFT JOIN `tabMode of Payment` mop_doc ON mop_doc.name = pe.mode_of_payment
         WHERE
             per.reference_doctype = 'Sales Order'
             AND pe.docstatus = 1
+            AND so.set_warehouse = %(pos_warehouse)s
             AND pe.posting_date BETWEEN %(from_date)s AND %(to_date)s
         GROUP BY per.reference_name, pe.mode_of_payment, mop_doc.type
     """, {
         "from_date": from_date,
         "to_date": to_date,
+        "pos_warehouse": pos_warehouse,
     }, as_dict=True)
 
     advance_map = {}
@@ -87,7 +99,7 @@ def execute(filters=None):
         advance_map.setdefault(a.sales_order, []).append(a)
 
     # -------------------------------------------------
-    # 🔹 INVOICE PAYMENTS (PE)
+    # 🔹 INVOICE PAYMENT ENTRY
     # -------------------------------------------------
     invoice_pe = frappe.db.sql("""
         SELECT
@@ -144,7 +156,7 @@ def execute(filters=None):
 
         sales_type = get_sales_type(inv.customer)
 
-        # ---- ADVANCES FROM SALES ORDER ----
+        # ---- SALES ADVANCE (FROM SALES ORDER PE) ----
         if inv.sales_orders:
             for so in inv.sales_orders.split(","):
                 for adv in advance_map.get(so, []):
@@ -156,7 +168,6 @@ def execute(filters=None):
                         "mode": adv.mop
                     })
 
-        # total advance
         total_advance = sum(
             adv.amount for so in (inv.sales_orders or "").split(",")
             for adv in advance_map.get(so, [])
@@ -188,7 +199,7 @@ def execute(filters=None):
                 })
             continue
 
-        # ---- CREDIT ----
+        # ---- CREDIT SALE ----
         normalized.append({
             "parent": f"{sales_type} - Credit Sale",
             "invoice": inv.invoice,
