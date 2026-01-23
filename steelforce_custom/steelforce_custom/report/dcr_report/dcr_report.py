@@ -1,5 +1,4 @@
 # Copyright (c) 2025, siva and contributors
-# For license information, please see license.txt
 
 import frappe
 from frappe.utils import getdate, add_days
@@ -17,21 +16,15 @@ def execute(filters=None):
     to_date = filters.get("to_date")
     pos_profile = filters.get("pos_profile")
 
-    # -------------------------------------------------
-    # POS PROFILE WAREHOUSE (IMPORTANT)
-    # -------------------------------------------------
     pos_warehouse = frappe.db.get_value("POS Profile", pos_profile, "warehouse")
 
-    # -------------------------------------------------
-    # BUSINESS DAY WINDOW (03:00 → 03:00)
-    # -------------------------------------------------
     from_datetime = datetime.combine(getdate(from_date), time(3, 0, 0))
     to_datetime = datetime.combine(add_days(getdate(to_date), 1), time(3, 0, 0))
 
     columns = [
-        {"fieldname": "name", "label": "Sales Type / Mode / Invoice", "fieldtype": "Data", "width": 360},
+        {"fieldname": "name", "label": "Sales Type / Mode / Invoice / SO", "fieldtype": "Data", "width": 360},
         {"fieldname": "amount", "label": "Amount", "fieldtype": "Currency", "width": 180},
-        {"fieldname": "invoice", "label": "Invoice", "fieldtype": "Link", "options": "Sales Invoice", "width": 260},
+        {"fieldname": "invoice", "label": "Invoice", "fieldtype": "Link", "options": "Sales Invoice", "width": 200},
     ]
 
     data = []
@@ -40,14 +33,41 @@ def execute(filters=None):
     total_card_counter_home = 0
 
     # -------------------------------------------------
-    # 1️⃣ INVOICES IN POS WINDOW
+    # 1️⃣ ADVANCES (PE AGAINST SALES ORDER — EVEN WITHOUT INVOICE)
+    # -------------------------------------------------
+    advances = frappe.db.sql("""
+        SELECT
+            so.name AS sales_order,
+            so.customer,
+            pe.mode_of_payment AS mop,
+            mop_doc.type AS mop_type,
+            SUM(per.allocated_amount) AS amount
+        FROM `tabPayment Entry Reference` per
+        JOIN `tabPayment Entry` pe ON pe.name = per.parent
+        JOIN `tabSales Order` so ON so.name = per.reference_name
+        LEFT JOIN `tabMode of Payment` mop_doc ON mop_doc.name = pe.mode_of_payment
+        WHERE
+            per.reference_doctype = 'Sales Order'
+            AND pe.docstatus = 1
+            AND so.set_warehouse = %(warehouse)s
+            AND pe.posting_date BETWEEN %(from_date)s AND %(to_date)s
+        GROUP BY so.name, pe.mode_of_payment, mop_doc.type
+    """, {
+        "warehouse": pos_warehouse,
+        "from_date": from_date,
+        "to_date": to_date,
+    }, as_dict=True)
+
+    advance_so_set = {a.sales_order for a in advances}
+
+    # -------------------------------------------------
+    # 2️⃣ INVOICES IN POS WINDOW
     # -------------------------------------------------
     invoices = frappe.db.sql("""
         SELECT
             si.name,
             si.customer,
-            si.grand_total,
-            si.is_return
+            si.grand_total
         FROM `tabSales Invoice` si
         WHERE
             si.docstatus = 1
@@ -63,44 +83,13 @@ def execute(filters=None):
     invoice_names = tuple(i.name for i in invoices) or ("",)
 
     # -------------------------------------------------
-    # 2️⃣ ADVANCES (PE AGAINST SALES ORDER OF SAME WAREHOUSE)
-    # -------------------------------------------------
-    advances = frappe.db.sql("""
-        SELECT
-            per.reference_name AS sales_order,
-            pe.mode_of_payment AS mop,
-            mop_doc.type AS mop_type,
-            SUM(per.allocated_amount) AS amount
-        FROM `tabPayment Entry Reference` per
-        JOIN `tabPayment Entry` pe ON pe.name = per.parent
-        JOIN `tabSales Order` so ON so.name = per.reference_name
-        LEFT JOIN `tabMode of Payment` mop_doc ON mop_doc.name = pe.mode_of_payment
-        WHERE
-            per.reference_doctype = 'Sales Order'
-            AND pe.docstatus = 1
-            AND so.set_warehouse = %(pos_warehouse)s
-            AND pe.posting_date BETWEEN %(from_date)s AND %(to_date)s
-        GROUP BY per.reference_name, pe.mode_of_payment, mop_doc.type
-    """, {
-        "pos_warehouse": pos_warehouse,
-        "from_date": from_date,
-        "to_date": to_date,
-    }, as_dict=True)
-
-    advance_map = {}
-    for a in advances:
-        advance_map.setdefault(a.sales_order, []).append(a)
-
-    # -------------------------------------------------
     # 3️⃣ MAP INVOICE → SALES ORDER
     # -------------------------------------------------
     invoice_so = frappe.db.sql("""
-        SELECT DISTINCT
-            sii.parent AS invoice,
-            sii.sales_order
-        FROM `tabSales Invoice Item` sii
-        WHERE sii.parent IN %(invoices)s
-          AND sii.sales_order IS NOT NULL
+        SELECT DISTINCT parent AS invoice, sales_order
+        FROM `tabSales Invoice Item`
+        WHERE parent IN %(invoices)s
+          AND sales_order IS NOT NULL
     """, {"invoices": invoice_names}, as_dict=True)
 
     inv_so_map = {}
@@ -150,7 +139,7 @@ def execute(filters=None):
         pos_map.setdefault(p.invoice, []).append(p)
 
     # -------------------------------------------------
-    # 6️⃣ NORMALIZE
+    # NORMALIZE
     # -------------------------------------------------
     normalized = []
 
@@ -161,94 +150,79 @@ def execute(filters=None):
             return "Counter Sales"
         return "Home Sales"
 
+    # ---- ADVANCE ONLY (NO INVOICE YET) ----
+    for a in advances:
+        normalized.append({
+            "parent": f"{get_sales_type(a.customer)} - Sales Advance - {a.mop}",
+            "name": a.sales_order,
+            "amount": a.amount,
+            "mode": a.mop
+        })
+
+    # ---- INVOICE FLOW ----
     for inv in invoices:
 
         sales_type = get_sales_type(inv.customer)
 
-        # ---- SALES ADVANCE ----
+        # advance linked to this invoice
         so_list = inv_so_map.get(inv.name, [])
+        total_advance = sum(
+            a.amount for so in so_list for a in advances if a.sales_order == so
+        )
 
-        total_advance = 0
-        for so in so_list:
-            for adv in advance_map.get(so, []):
-                normalized.append({
-                    "parent": f"{sales_type} - Sales Advance - {adv.mop}",
-                    "invoice": inv.name,
-                    "amount": adv.amount,
-                    "sales_type": sales_type,
-                    "mode": adv.mop
-                })
-                total_advance += adv.amount
+        balance = inv.grand_total - total_advance
 
-        invoice_balance = inv.grand_total - total_advance
-
-        # ---- PAYMENT ENTRY ON INVOICE ----
         if inv.name in pe_map:
             for p in pe_map[inv.name]:
                 normalized.append({
                     "parent": f"{sales_type} - {p.mop}",
-                    "invoice": inv.name,
+                    "name": inv.name,
                     "amount": p.amount,
-                    "sales_type": sales_type,
                     "mode": p.mop
                 })
             continue
 
-        # ---- POS PAYMENT ----
         if inv.name in pos_map:
             for p in pos_map[inv.name]:
                 normalized.append({
                     "parent": f"{sales_type} - {p.mop}",
-                    "invoice": inv.name,
+                    "name": inv.name,
                     "amount": p.amount,
-                    "sales_type": sales_type,
                     "mode": p.mop
                 })
             continue
 
-        # ---- CREDIT ----
         normalized.append({
             "parent": f"{sales_type} - Credit Sale",
-            "invoice": inv.name,
-            "amount": invoice_balance,
-            "sales_type": sales_type,
+            "name": inv.name,
+            "amount": balance,
             "mode": "Credit Sale"
         })
 
     # -------------------------------------------------
-    # 7️⃣ BUILD TREE
+    # BUILD TREE
     # -------------------------------------------------
     parents = {}
     for r in normalized:
         parents.setdefault(r["parent"], []).append(r)
 
     for parent, items in sorted(parents.items()):
+        amt = sum(i["amount"] for i in items)
 
-        parent_amount = sum(i["amount"] for i in items)
-
-        data.append({"name": color_parent_name(parent), "amount": parent_amount, "indent": 0})
-        grand_total += parent_amount
+        data.append({"name": color_parent_name(parent), "amount": amt, "indent": 0})
+        grand_total += amt
 
         sales_type, mode_only = parent.split(" - ", 1)
 
         if sales_type in ("Counter Sales", "Home Sales"):
             if "Cash" in mode_only:
-                total_cash_counter_home += parent_amount
+                total_cash_counter_home += amt
             elif "Sales Advance" not in mode_only and mode_only != "Credit Sale":
-                total_card_counter_home += parent_amount
+                total_card_counter_home += amt
 
         for i in items:
-            data.append({
-                "name": i["invoice"],
-                "invoice": i["invoice"],
-                "parent": parent,
-                "amount": i["amount"],
-                "indent": 1
-            })
+            data.append({"name": i["name"], "amount": i["amount"], "indent": 1})
 
-    # -------------------------------------------------
-    # SUMMARY
-    # -------------------------------------------------
     vat_amount = round(grand_total * 0.15 / 1.15, 2)
     total_wo_vat = round(grand_total - vat_amount, 2)
 
