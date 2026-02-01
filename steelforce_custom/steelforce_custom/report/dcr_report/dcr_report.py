@@ -155,27 +155,25 @@ def execute(filters=None):
     normalized = []
 
     def get_sales_type(customer):
-        if customer in ('HUNGER STATION','KETA','JAHEZ','TO YOU'):
+        if customer in ('HUNGER STATION', 'KETA', 'JAHEZ', 'TO YOU'):
             return "Online Sales"
         if customer == "Walk-in Customer":
             return "Counter Sales"
         return "Home Sales"
 
-    # ---- SALES ADVANCE (EVEN WITHOUT INVOICE) ----
+    # ---- SALES ADVANCE (ALWAYS SHOWN) ----
     for a in advances:
         normalized.append({
             "parent": f"{get_sales_type(a.customer)} - Sales Advance - {a.mop}",
             "name": a.sales_order,
             "amount": a.amount,
-            # no invoice key here
         })
 
-    # ---- INVOICE FLOW ----
+    # ---- INVOICE FLOW (ONLY REMAINING BALANCE) ----
     for inv in invoices:
 
         sales_type = get_sales_type(inv.customer)
 
-        # total advance linked to this invoice
         so_list = inv_so_map.get(inv.name, [])
         total_advance = sum(
             adv.amount
@@ -183,7 +181,10 @@ def execute(filters=None):
             for adv in advance_map.get(so, [])
         )
 
-        balance = inv.grand_total - total_advance
+        remaining = inv.grand_total - total_advance
+
+        if remaining <= 0:
+            continue
 
         # Payment Entry on Invoice
         if inv.name in pe_map:
@@ -191,8 +192,8 @@ def execute(filters=None):
                 normalized.append({
                     "parent": f"{sales_type} - {p.mop}",
                     "name": inv.name,
-                    "invoice": inv.name,   # ✅ FIX
-                    "amount": p.amount,
+                    "invoice": inv.name,
+                    "amount": min(p.amount, remaining),
                 })
             continue
 
@@ -202,8 +203,8 @@ def execute(filters=None):
                 normalized.append({
                     "parent": f"{sales_type} - {p.mop}",
                     "name": inv.name,
-                    "invoice": inv.name,   # ✅ FIX
-                    "amount": p.amount,
+                    "invoice": inv.name,
+                    "amount": min(p.amount, remaining),
                 })
             continue
 
@@ -211,8 +212,8 @@ def execute(filters=None):
         normalized.append({
             "parent": f"{sales_type} - Credit Sale",
             "name": inv.name,
-            "invoice": inv.name,       # ✅ FIX
-            "amount": balance,
+            "invoice": inv.name,
+            "amount": remaining,
         })
 
     # -------------------------------------------------
@@ -244,7 +245,7 @@ def execute(filters=None):
         for i in items:
             data.append({
                 "name": i["name"],
-                "invoice": i.get("invoice"),  # ✅ invoice column works
+                "invoice": i.get("invoice"),
                 "amount": i["amount"],
                 "indent": 1
             })
