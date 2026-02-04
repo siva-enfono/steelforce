@@ -16,13 +16,19 @@ def execute(filters=None):
     to_date = filters.get("to_date")
     pos_profile = filters.get("pos_profile")
 
+    # -------------------------------------------------
+    # POS PROFILE WAREHOUSE
+    # -------------------------------------------------
     pos_warehouse = frappe.db.get_value("POS Profile", pos_profile, "warehouse")
 
+    # -------------------------------------------------
+    # BUSINESS DAY WINDOW (03:00 → 03:00)
+    # -------------------------------------------------
     from_datetime = datetime.combine(getdate(from_date), time(3, 0, 0))
     to_datetime = datetime.combine(add_days(getdate(to_date), 1), time(3, 0, 0))
 
     columns = [
-        {"fieldname": "name", "label": "Sales Type / Mode / Invoice / SO", "fieldtype": "Data", "width": 360},
+        {"fieldname": "name", "label": "Sales Type / Mode / Doc", "fieldtype": "Data", "width": 360},
         {"fieldname": "amount", "label": "Amount", "fieldtype": "Currency", "width": 180},
         {"fieldname": "invoice", "label": "Invoice", "fieldtype": "Link", "options": "Sales Invoice", "width": 200},
     ]
@@ -33,13 +39,23 @@ def execute(filters=None):
     total_card_counter_home = 0
 
     # -------------------------------------------------
+    # CASH MODE NAMES (SAFE)
+    # -------------------------------------------------
+    cash_modes = frappe.get_all(
+        "Mode of Payment",
+        filters={"type": "Cash"},
+        pluck="name"
+    )
+
+    # -------------------------------------------------
     # 1️⃣ INVOICES
     # -------------------------------------------------
     invoices = frappe.db.sql("""
         SELECT
             si.name,
             si.customer,
-            si.grand_total
+            si.grand_total,
+            IFNULL(si.change_amount, 0) AS change_amount
         FROM `tabSales Invoice` si
         WHERE
             si.docstatus = 1
@@ -72,6 +88,10 @@ def execute(filters=None):
             AND per.reference_name IN %(invoices)s
     """, {"invoices": invoice_names}, as_dict=True)
 
+    ref_map = {}
+    for r in refs:
+        ref_map.setdefault(r.invoice, []).append(r)
+
     # -------------------------------------------------
     # 3️⃣ POS PAYMENTS
     # -------------------------------------------------
@@ -101,18 +121,14 @@ def execute(filters=None):
             return "Counter Sales"
         return "Home Sales"
 
-    # group refs by invoice
-    ref_map = {}
-    for r in refs:
-        ref_map.setdefault(r.invoice, []).append(r)
-
     for inv_name, inv in invoice_map.items():
         sales_type = get_sales_type(inv.customer)
 
         advance_total = 0
-        paid_total = 0
+        cash_paid = 0
+        other_paid = {}
 
-        # ---- PAYMENT ENTRY ROWS ----
+        # ---- PAYMENT ENTRY ----
         for r in ref_map.get(inv_name, []):
             if r.advance_voucher_type == "Sales Order":
                 normalized.append({
@@ -122,26 +138,43 @@ def execute(filters=None):
                 })
                 advance_total += r.allocated_amount
             else:
-                normalized.append({
-                    "parent": f"{sales_type} - {r.mode_of_payment}",
-                    "name": inv_name,
-                    "invoice": inv_name,
-                    "amount": r.allocated_amount,
-                })
-                paid_total += r.allocated_amount
+                if r.mode_of_payment in cash_modes:
+                    cash_paid += r.allocated_amount
+                else:
+                    other_paid[r.mode_of_payment] = other_paid.get(r.mode_of_payment, 0) + r.allocated_amount
 
         # ---- POS PAYMENTS ----
         for p in pos_map.get(inv_name, []):
+            if p.mode_of_payment in cash_modes:
+                cash_paid += p.amount
+            else:
+                other_paid[p.mode_of_payment] = other_paid.get(p.mode_of_payment, 0) + p.amount
+
+        # ---- APPLY CHANGE (ONCE, CASH ONLY) ----
+        if cash_paid > 0 and inv.change_amount:
+            cash_paid = max(cash_paid - inv.change_amount, 0)
+
+        # ---- EMIT CASH ----
+        if cash_paid > 0:
             normalized.append({
-                "parent": f"{sales_type} - {p.mode_of_payment}",
+                "parent": f"{sales_type} - Cash",
                 "name": inv_name,
                 "invoice": inv_name,
-                "amount": p.amount,
+                "amount": cash_paid,
             })
-            paid_total += p.amount
 
-        # ---- CREDIT BALANCE ----
-        balance = inv.grand_total - advance_total - paid_total
+        # ---- EMIT OTHER MODES ----
+        for mop, amt in other_paid.items():
+            if amt > 0:
+                normalized.append({
+                    "parent": f"{sales_type} - {mop}",
+                    "name": inv_name,
+                    "invoice": inv_name,
+                    "amount": amt,
+                })
+
+        # ---- CREDIT ----
+        balance = inv.grand_total - advance_total - cash_paid - sum(other_paid.values())
         if balance > 0:
             normalized.append({
                 "parent": f"{sales_type} - Credit Sale",
