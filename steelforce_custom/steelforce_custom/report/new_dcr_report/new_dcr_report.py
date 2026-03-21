@@ -20,8 +20,8 @@ def execute(filters=None):
     # -------------------------------------------------
     # 🔹 BUSINESS DAY WINDOW (03:00 → 03:00)
     # -------------------------------------------------
-    from_datetime = datetime.combine(getdate(from_date), time(3, 0, 0))
-    to_datetime = datetime.combine(add_days(getdate(to_date), 1), time(3, 0, 0))
+    from_datetime = datetime.combine(getdate(from_date), time(4, 0, 0))
+    to_datetime = datetime.combine(add_days(getdate(to_date), 1), time(4, 0, 0))
 
     # -------------------------------------------------
     # COLUMNS
