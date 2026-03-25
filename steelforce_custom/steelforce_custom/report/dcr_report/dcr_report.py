@@ -99,9 +99,11 @@ def execute(filters=None):
             pe.mode_of_payment
         FROM `tabPayment Entry` pe
         JOIN `tabPayment Entry Reference` per_advance ON per_advance.parent = pe.name
+        JOIN `tabSales Order` so ON so.name = per_advance.reference_name
         WHERE
             pe.docstatus = 1
             AND per_advance.reference_doctype = 'Sales Order'
+            AND so.set_warehouse = %(pos_warehouse)s
             AND pe.name IN (
                 SELECT DISTINCT pe2.name
                 FROM `tabPayment Entry Reference` per2
@@ -109,7 +111,7 @@ def execute(filters=None):
                 WHERE per2.reference_name IN %(invoices)s
                 AND per2.reference_doctype = 'Sales Invoice'
             )
-    """, {"invoices": invoice_names}, as_dict=True)
+    """, {"invoices": invoice_names, "pos_warehouse": pos_warehouse}, as_dict=True)
     
     advance_map = {}
     for a in advance_allocations:
@@ -137,8 +139,10 @@ def execute(filters=None):
             pe.docstatus = 1
             AND pe.payment_type = 'Receive'
             AND per.reference_doctype = 'Sales Order'
+            AND so.set_warehouse = %(pos_warehouse)s
             AND pe.posting_date BETWEEN %(from_date)s AND %(to_date)s
     """, {
+        "pos_warehouse": pos_warehouse,
         "from_date": from_date,
         "to_date": to_date,
     }, as_dict=True)
