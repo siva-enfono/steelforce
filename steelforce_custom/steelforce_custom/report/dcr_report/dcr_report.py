@@ -77,8 +77,7 @@ def execute(filters=None):
     refs = frappe.db.sql("""
         SELECT
             per.reference_name AS invoice,
-            per.advance_voucher_type,
-            per.advance_voucher_no,
+            per.reference_doctype,
             per.allocated_amount,
             pe.mode_of_payment,
             pe.name AS payment_entry
@@ -91,9 +90,34 @@ def execute(filters=None):
 
     ref_map = {}
     allocated_pe_set = set()
+    
+    # Track advances that were allocated to invoices - we need to find their original Sales Order
+    advance_allocations = frappe.db.sql("""
+        SELECT DISTINCT
+            pe.name AS payment_entry,
+            per_advance.reference_name AS sales_order,
+            pe.mode_of_payment
+        FROM `tabPayment Entry` pe
+        JOIN `tabPayment Entry Reference` per_advance ON per_advance.parent = pe.name
+        WHERE
+            pe.docstatus = 1
+            AND per_advance.reference_doctype = 'Sales Order'
+            AND pe.name IN (
+                SELECT DISTINCT pe2.name
+                FROM `tabPayment Entry Reference` per2
+                JOIN `tabPayment Entry` pe2 ON pe2.name = per2.parent
+                WHERE per2.reference_name IN %(invoices)s
+                AND per2.reference_doctype = 'Sales Invoice'
+            )
+    """, {"invoices": invoice_names}, as_dict=True)
+    
+    advance_map = {}
+    for a in advance_allocations:
+        advance_map[a.payment_entry] = a
+    
     for r in refs:
         ref_map.setdefault(r.invoice, []).append(r)
-        if r.advance_voucher_type == "Sales Order":
+        if r.payment_entry in advance_map:
             allocated_pe_set.add(r.payment_entry)
 
     # -------------------------------------------------
@@ -103,23 +127,20 @@ def execute(filters=None):
         SELECT DISTINCT
             pe.name AS payment_entry,
             pe.mode_of_payment,
-            per.advance_voucher_no AS sales_order,
+            per.reference_name AS sales_order,
             per.allocated_amount,
             so.customer
         FROM `tabPayment Entry` pe
         JOIN `tabPayment Entry Reference` per ON per.parent = pe.name
-        JOIN `tabSales Order` so ON so.name = per.advance_voucher_no
+        JOIN `tabSales Order` so ON so.name = per.reference_name
         WHERE
             pe.docstatus = 1
             AND pe.payment_type = 'Receive'
-            AND per.advance_voucher_type = 'Sales Order'
-            AND so.pos_profile = %(pos_profile)s
-            AND TIMESTAMP(pe.posting_date, pe.posting_time)
-                BETWEEN %(from_datetime)s AND %(to_datetime)s
+            AND per.reference_doctype = 'Sales Order'
+            AND pe.posting_date BETWEEN %(from_date)s AND %(to_date)s
     """, {
-        "pos_profile": pos_profile,
-        "from_datetime": from_datetime,
-        "to_datetime": to_datetime,
+        "from_date": from_date,
+        "to_date": to_date,
     }, as_dict=True)
 
     # -------------------------------------------------
@@ -160,14 +181,17 @@ def execute(filters=None):
 
         # ---- PAYMENT ENTRY ----
         for r in ref_map.get(inv_name, []):
-            if r.advance_voucher_type == "Sales Order":
+            # Check if this payment entry is a sales advance
+            if r.payment_entry in advance_map:
+                adv = advance_map[r.payment_entry]
                 normalized.append({
                     "parent": f"{sales_type} - Sales Advance - {r.mode_of_payment}",
-                    "name": r.advance_voucher_no,
+                    "name": adv.sales_order,
                     "amount": r.allocated_amount,
                 })
                 advance_total += r.allocated_amount
             else:
+                # Regular payment entry (not advance)
                 if r.mode_of_payment in cash_modes:
                     cash_paid += r.allocated_amount
                 else:
