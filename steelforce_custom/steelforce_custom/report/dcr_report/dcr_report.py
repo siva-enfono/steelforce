@@ -55,6 +55,7 @@ def execute(filters=None):
             si.name,
             si.customer,
             si.grand_total,
+            si.is_return,
             IFNULL(si.change_amount, 0) AS change_amount
         FROM `tabSales Invoice` si
         WHERE
@@ -178,6 +179,14 @@ def execute(filters=None):
 
     for inv_name, inv in invoice_map.items():
         sales_type = get_sales_type(inv.customer)
+        
+        # For returns, use negative amounts and separate category
+        if inv.is_return:
+            sales_type = f"{sales_type} - Return"
+            # If grand_total is already negative, don't multiply again
+            multiplier = -1 if inv.grand_total > 0 else 1
+        else:
+            multiplier = 1
 
         advance_total = 0
         cash_paid = 0
@@ -188,10 +197,11 @@ def execute(filters=None):
             # Check if this payment entry is a sales advance (using advance_voucher fields)
             if r.advance_voucher_type == "Sales Order" and r.advance_voucher_no in valid_so_set:
                 # This is a Sales Order advance with matching warehouse
+                # Note: Sales advances are NOT negative even for returns (they're deductions)
                 normalized.append({
                     "parent": f"{sales_type} - Sales Advance - {r.mode_of_payment}",
                     "name": r.advance_voucher_no,
-                    "amount": r.allocated_amount,
+                    "amount": r.allocated_amount * multiplier,
                 })
                 advance_total += r.allocated_amount
             else:
@@ -209,7 +219,8 @@ def execute(filters=None):
                 other_paid[p.mode_of_payment] = other_paid.get(p.mode_of_payment, 0) + p.amount
 
         # ---- APPLY CHANGE (ONCE, CASH ONLY) ----
-        if cash_paid > 0 and inv.change_amount:
+        # Don't apply change for returns
+        if not inv.is_return and cash_paid > 0 and inv.change_amount:
             cash_paid = max(cash_paid - inv.change_amount, 0)
 
         # ---- EMIT CASH ----
@@ -218,7 +229,7 @@ def execute(filters=None):
                 "parent": f"{sales_type} - Cash",
                 "name": inv_name,
                 "invoice": inv_name,
-                "amount": cash_paid,
+                "amount": cash_paid * multiplier,
             })
 
         # ---- EMIT OTHER MODES ----
@@ -228,7 +239,7 @@ def execute(filters=None):
                     "parent": f"{sales_type} - {mop}",
                     "name": inv_name,
                     "invoice": inv_name,
-                    "amount": amt,
+                    "amount": amt * multiplier,
                 })
 
         # ---- CREDIT ----
@@ -238,7 +249,7 @@ def execute(filters=None):
                 "parent": f"{sales_type} - Credit Sale",
                 "name": inv_name,
                 "invoice": inv_name,
-                "amount": balance,
+                "amount": balance * multiplier,
             })
 
     # -------------------------------------------------
@@ -269,9 +280,18 @@ def execute(filters=None):
         data.append({"name": color_parent_name(parent), "amount": amt, "indent": 0})
         grand_total += amt
 
-        sales_type, mode_only = parent.split(" - ", 1)
+        # Split parent to extract sales type and mode
+        parts = parent.split(" - ")
+        base_sales_type = parts[0]
+        
+        # Check if it's a return (e.g., "Counter Sales - Return - Cash")
+        if len(parts) > 2 and parts[1] == "Return":
+            mode_only = " - ".join(parts[2:])
+        else:
+            mode_only = " - ".join(parts[1:])
 
-        if sales_type in ("Counter Sales", "Home Sales"):
+        # Calculate totals for Counter Sales and Home Sales (including returns)
+        if base_sales_type in ("Counter Sales", "Home Sales"):
             if "Cash" in mode_only:
                 total_cash_counter_home += amt
             elif "Sales Advance" not in mode_only and mode_only != "Credit Sale":
