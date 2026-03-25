@@ -79,6 +79,8 @@ def execute(filters=None):
             per.reference_name AS invoice,
             per.reference_doctype,
             per.allocated_amount,
+            per.advance_voucher_type,
+            per.advance_voucher_no,
             pe.mode_of_payment,
             pe.name AS payment_entry
         FROM `tabPayment Entry Reference` per
@@ -86,51 +88,19 @@ def execute(filters=None):
         WHERE
             pe.docstatus = 1
             AND per.reference_name IN %(invoices)s
+            AND per.reference_doctype = 'Sales Invoice'
     """, {"invoices": invoice_names}, as_dict=True)
 
     ref_map = {}
     allocated_pe_set = set()
     
-    # Track advances that were allocated to invoices - we need to find their original Sales Order
-    advance_allocations = frappe.db.sql("""
+    # Track ALL Payment Entries with Sales Order advances in date range
+    all_advances = frappe.db.sql("""
         SELECT DISTINCT
             pe.name AS payment_entry,
-            per_advance.reference_name AS sales_order,
-            pe.mode_of_payment
-        FROM `tabPayment Entry` pe
-        JOIN `tabPayment Entry Reference` per_advance ON per_advance.parent = pe.name
-        JOIN `tabSales Order` so ON so.name = per_advance.reference_name
-        WHERE
-            pe.docstatus = 1
-            AND per_advance.reference_doctype = 'Sales Order'
-            AND so.set_warehouse = %(pos_warehouse)s
-            AND pe.name IN (
-                SELECT DISTINCT pe2.name
-                FROM `tabPayment Entry Reference` per2
-                JOIN `tabPayment Entry` pe2 ON pe2.name = per2.parent
-                WHERE per2.reference_name IN %(invoices)s
-                AND per2.reference_doctype = 'Sales Invoice'
-            )
-    """, {"invoices": invoice_names, "pos_warehouse": pos_warehouse}, as_dict=True)
-    
-    advance_map = {}
-    for a in advance_allocations:
-        advance_map[a.payment_entry] = a
-    
-    for r in refs:
-        ref_map.setdefault(r.invoice, []).append(r)
-        if r.payment_entry in advance_map:
-            allocated_pe_set.add(r.payment_entry)
-
-    # -------------------------------------------------
-    # 2B️⃣ UNALLOCATED SALES ADVANCES (NOT YET INVOICED)
-    # -------------------------------------------------
-    unallocated_advances = frappe.db.sql("""
-        SELECT DISTINCT
-            pe.name AS payment_entry,
-            pe.mode_of_payment,
             per.reference_name AS sales_order,
-            per.allocated_amount,
+            per.allocated_amount AS so_allocated_amount,
+            pe.mode_of_payment,
             so.customer
         FROM `tabPayment Entry` pe
         JOIN `tabPayment Entry Reference` per ON per.parent = pe.name
@@ -146,6 +116,36 @@ def execute(filters=None):
         "from_date": from_date,
         "to_date": to_date,
     }, as_dict=True)
+    
+    # Build a map of all advances by payment_entry
+    advance_map = {}
+    for a in all_advances:
+        advance_map[a.payment_entry] = a
+    
+    # Collect unique Sales Orders from advance_voucher_no for warehouse validation
+    so_names = set()
+    for r in refs:
+        if r.advance_voucher_type == "Sales Order" and r.advance_voucher_no:
+            so_names.add(r.advance_voucher_no)
+    
+    # Fetch Sales Orders with matching warehouse
+    valid_so_set = set()
+    if so_names:
+        valid_sos = frappe.db.sql("""
+            SELECT name 
+            FROM `tabSales Order` 
+            WHERE name IN %(so_names)s 
+            AND set_warehouse = %(pos_warehouse)s
+        """, {"so_names": tuple(so_names), "pos_warehouse": pos_warehouse}, as_dict=True)
+        valid_so_set = {so.name for so in valid_sos}
+    
+    # Build ref_map and allocated_pe_set
+    for r in refs:
+        ref_map.setdefault(r.invoice, []).append(r)
+        # Mark this PE as allocated if it has a valid Sales Order advance
+        if r.advance_voucher_type == "Sales Order" and r.advance_voucher_no in valid_so_set:
+            allocated_pe_set.add(r.payment_entry)
+
 
     # -------------------------------------------------
     # 3️⃣ POS PAYMENTS
@@ -185,12 +185,12 @@ def execute(filters=None):
 
         # ---- PAYMENT ENTRY ----
         for r in ref_map.get(inv_name, []):
-            # Check if this payment entry is a sales advance
-            if r.payment_entry in advance_map:
-                adv = advance_map[r.payment_entry]
+            # Check if this payment entry is a sales advance (using advance_voucher fields)
+            if r.advance_voucher_type == "Sales Order" and r.advance_voucher_no in valid_so_set:
+                # This is a Sales Order advance with matching warehouse
                 normalized.append({
                     "parent": f"{sales_type} - Sales Advance - {r.mode_of_payment}",
-                    "name": adv.sales_order,
+                    "name": r.advance_voucher_no,
                     "amount": r.allocated_amount,
                 })
                 advance_total += r.allocated_amount
@@ -244,16 +244,16 @@ def execute(filters=None):
     # -------------------------------------------------
     # 4️⃣ UNALLOCATED ADVANCES (NOT YET INVOICED)
     # -------------------------------------------------
-    for adv in unallocated_advances:
+    for pe_name, adv in advance_map.items():
         # Skip if this payment entry was already allocated to an invoice in this report
-        if adv.payment_entry in allocated_pe_set:
+        if pe_name in allocated_pe_set:
             continue
         
         sales_type = get_sales_type(adv.customer)
         normalized.append({
             "parent": f"{sales_type} - Sales Advance - {adv.mode_of_payment}",
             "name": adv.sales_order,
-            "amount": adv.allocated_amount,
+            "amount": adv.so_allocated_amount,
         })
 
     # -------------------------------------------------
