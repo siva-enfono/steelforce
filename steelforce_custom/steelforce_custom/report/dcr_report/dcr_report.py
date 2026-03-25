@@ -72,7 +72,7 @@ def execute(filters=None):
     invoice_names = tuple(invoice_map.keys()) or ("",)
 
     # -------------------------------------------------
-    # 2️⃣ PAYMENT ENTRY REFERENCES
+    # 2️⃣ PAYMENT ENTRY REFERENCES (ALLOCATED TO INVOICES)
     # -------------------------------------------------
     refs = frappe.db.sql("""
         SELECT
@@ -80,7 +80,8 @@ def execute(filters=None):
             per.advance_voucher_type,
             per.advance_voucher_no,
             per.allocated_amount,
-            pe.mode_of_payment
+            pe.mode_of_payment,
+            pe.name AS payment_entry
         FROM `tabPayment Entry Reference` per
         JOIN `tabPayment Entry` pe ON pe.name = per.parent
         WHERE
@@ -89,8 +90,37 @@ def execute(filters=None):
     """, {"invoices": invoice_names}, as_dict=True)
 
     ref_map = {}
+    allocated_pe_set = set()
     for r in refs:
         ref_map.setdefault(r.invoice, []).append(r)
+        if r.advance_voucher_type == "Sales Order":
+            allocated_pe_set.add(r.payment_entry)
+
+    # -------------------------------------------------
+    # 2B️⃣ UNALLOCATED SALES ADVANCES (NOT YET INVOICED)
+    # -------------------------------------------------
+    unallocated_advances = frappe.db.sql("""
+        SELECT DISTINCT
+            pe.name AS payment_entry,
+            pe.mode_of_payment,
+            per.advance_voucher_no AS sales_order,
+            per.allocated_amount,
+            so.customer
+        FROM `tabPayment Entry` pe
+        JOIN `tabPayment Entry Reference` per ON per.parent = pe.name
+        JOIN `tabSales Order` so ON so.name = per.advance_voucher_no
+        WHERE
+            pe.docstatus = 1
+            AND pe.payment_type = 'Receive'
+            AND per.advance_voucher_type = 'Sales Order'
+            AND so.pos_profile = %(pos_profile)s
+            AND TIMESTAMP(pe.posting_date, pe.posting_time)
+                BETWEEN %(from_datetime)s AND %(to_datetime)s
+    """, {
+        "pos_profile": pos_profile,
+        "from_datetime": from_datetime,
+        "to_datetime": to_datetime,
+    }, as_dict=True)
 
     # -------------------------------------------------
     # 3️⃣ POS PAYMENTS
@@ -182,6 +212,21 @@ def execute(filters=None):
                 "invoice": inv_name,
                 "amount": balance,
             })
+
+    # -------------------------------------------------
+    # 4️⃣ UNALLOCATED ADVANCES (NOT YET INVOICED)
+    # -------------------------------------------------
+    for adv in unallocated_advances:
+        # Skip if this payment entry was already allocated to an invoice in this report
+        if adv.payment_entry in allocated_pe_set:
+            continue
+        
+        sales_type = get_sales_type(adv.customer)
+        normalized.append({
+            "parent": f"{sales_type} - Sales Advance - {adv.mode_of_payment}",
+            "name": adv.sales_order,
+            "amount": adv.allocated_amount,
+        })
 
     # -------------------------------------------------
     # BUILD TREE
